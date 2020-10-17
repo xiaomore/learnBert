@@ -1,3 +1,6 @@
+源代码来源于：https://github.com/google-research/bert
+本项目仅进行学习BERT，并加入相应的注释，方便日后查看。
+
 # BERT
 
 **\*\*\*\*\* New March 11th, 2020: Smaller BERT Models \*\*\*\*\***
