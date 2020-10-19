@@ -12,7 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""BERT finetuning runner."""
+"""BERT finetuning runner.
+模型微调，依赖：tokenization.py，modeling.py，optimization.py
+"""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -131,18 +133,18 @@ class InputExample(object):
     """Constructs a InputExample.
 
     Args:
-      guid: Unique id for the example.
-      text_a: string. The untokenized text of the first sequence. For single
+      guid: 唯一id, Unique id for the example.
+      text_a: 字符串类型，表示第一个句子, string. The untokenized text of the first sequence. For single
         sequence tasks, only this sequence must be specified.
-      text_b: (Optional) string. The untokenized text of the second sequence.
+      text_b: 字符串类型，表示第二个句子, (Optional) string. The untokenized text of the second sequence.
         Only must be specified for sequence pair tasks.
-      label: (Optional) string. The label of the example. This should be
+      label: 分类标签 (Optional) string. The label of the example. This should be
         specified for train and dev examples, but not for test examples.
     """
     self.guid = guid
-    self.text_a = text_a
-    self.text_b = text_b
-    self.label = label
+    self.text_a = text_a  # 第一个句子
+    self.text_b = text_b  # 第二个句子（可以为None）
+    self.label = label    # 分类标签
 
 
 class PaddingInputExample(object):
@@ -176,7 +178,10 @@ class InputFeatures(object):
 
 class DataProcessor(object):
   """Base class for data converters for sequence classification data sets."""
-
+  """
+  DataProcessor是一个基类，并提供了一个_read_tsv()用于读取tsv文件，
+  要想读取自己的数据，需要实现了新的子类，像MrpcProcessor一样
+  """
   def get_train_examples(self, data_dir):
     """Gets a collection of `InputExample`s for the train set."""
     raise NotImplementedError()
@@ -295,9 +300,11 @@ class MnliProcessor(DataProcessor):
 
 class MrpcProcessor(DataProcessor):
   """Processor for the MRPC data set (GLUE version)."""
+  """这里处理MRPC数据"""
 
   def get_train_examples(self, data_dir):
     """See base class."""
+    """首先使用_read_tsv读取训练文件train.tsv，然后使用_create_examples把每一行变成一个InputExample对象"""
     return self._create_examples(
         self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
 
@@ -313,6 +320,7 @@ class MrpcProcessor(DataProcessor):
 
   def get_labels(self):
     """See base class."""
+    """表示这个MRPC任务只有两个label"""
     return ["0", "1"]
 
   def _create_examples(self, lines, set_type):
@@ -322,12 +330,17 @@ class MrpcProcessor(DataProcessor):
       if i == 0:
         continue
       guid = "%s-%s" % (set_type, i)
+      # 在数据集中，line[3]和line[4]代表第4/5列，是两个句子，如果是test，那么第一列，即line[0], 就是index，没有其他意义，
+      # 如果是train和dev， 第一列表示标签，有两种取值[0, 1]，判断两句话是否是同一个意思，0表示不同意思，1表示相同意思。
+      # convert_to_unicode的作用是把字符串变成Unicode的字符串，是为了兼容Python2和Python3，因为Python3的str就是Unicode
       text_a = tokenization.convert_to_unicode(line[3])
       text_b = tokenization.convert_to_unicode(line[4])
+      # 如果是测试集，可以忽略第一列，标签全部置为0
       if set_type == "test":
         label = "0"
       else:
         label = tokenization.convert_to_unicode(line[0])
+      # 最终构造出一个InputExample对象，有四个属性，请到InputExample方法内部查看
       examples.append(
           InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
     return examples
@@ -373,7 +386,7 @@ class ColaProcessor(DataProcessor):
           InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
     return examples
 
-
+# 尽量把这个函数研究明白，读懂了它就真正明白BERT是怎么把输入表示成向量的
 def convert_single_example(ex_index, example, label_list, max_seq_length,
                            tokenizer):
   """Converts a single `InputExample` into a single `InputFeatures`."""
@@ -386,6 +399,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
         label_id=0,
         is_real_example=False)
 
+  # label_map把label变成id
   label_map = {}
   for (i, label) in enumerate(label_list):
     label_map[label] = i
@@ -399,6 +413,8 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     # Modifies `tokens_a` and `tokens_b` in place so that the total
     # length is less than the specified length.
     # Account for [CLS], [SEP], [SEP] with "- 3"
+    # 如果有b，也就是有两句话，那么需要保留3个特殊Token[CLS],[SEP],[sep]
+    # 如果两个序列加起来太长，那么需要去掉一些
     _truncate_seq_pair(tokens_a, tokens_b, max_seq_length - 3)
   else:
     # Account for [CLS] and [SEP] with "- 2"
@@ -423,9 +439,27 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
   # For classification tasks, the first vector (corresponding to [CLS]) is
   # used as the "sentence vector". Note that this only makes sense because
   # the entire model is fine-tuned.
+
+  """
+  BERT的约定是：
+  (a) 对于两个序列：
+        tokens:   [CLS] is this jack ##son ##ville ? [SEP] no it is not . [SEP]
+        type_ids: 0     0  0    0    0     0       0 0     1  1  1  1   1 1
+  (b) 对于一个序列:
+        tokens:   [CLS] the dog is hairy . [SEP]
+        type_ids: 0     0   0   0  0     0 0      
+  
+  这里的type_ids用于区分一个Token是来自于第几个序列
+  对于type=0和type=1, 模型会学习出两个Embedding的向量。
+  虽然理论上这是不必要的，因为[SEP]已经隐式的确定了他们的边界。
+  但实际上加上type后，模型更能够更加容易的知道这个词属于哪个序列
+  
+  对于分类任务，[CLS]对应的向量可以被看成 "sentence vector"
+  注意：一定需要Fine-Tuning之后才有意义
+  """
   tokens = []
   segment_ids = []
-  tokens.append("[CLS]")
+  tokens.append("[CLS]")  # 序列开始加入[CLS]
   segment_ids.append(0)
   for token in tokens_a:
     tokens.append(token)
@@ -444,9 +478,12 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
 
   # The mask has 1 for real tokens and 0 for padding tokens. Only real
   # tokens are attended to.
+  # mask=1表示是‘真正’ 的Token，0则是Padding出来的，后面Attention时会通过tricky的技巧
+  # 让模型不能attend to 这些padding出来的Token上。
   input_mask = [1] * len(input_ids)
 
   # Zero-pad up to the sequence length.
+  # padding操作，使得序列长度正好等于max_seq_length
   while len(input_ids) < max_seq_length:
     input_ids.append(0)
     input_mask.append(0)
@@ -486,6 +523,8 @@ def file_based_convert_examples_to_features(
     if ex_index % 10000 == 0:
       tf.logging.info("Writing example %d of %d" % (ex_index, len(examples)))
 
+    # 把每个InputExample对象变成InputFeature，InputFeature就是一个存放特征的对象
+    # convert_single_example：BERT把输入表示成向量的过程
     feature = convert_single_example(ex_index, example, label_list,
                                      max_seq_length, tokenizer)
 
@@ -509,7 +548,7 @@ def file_based_convert_examples_to_features(
 def file_based_input_fn_builder(input_file, seq_length, is_training,
                                 drop_remainder):
   """Creates an `input_fn` closure to be passed to TPUEstimator."""
-
+  # 这个函数返回一个函数input_fn
   name_to_features = {
       "input_ids": tf.FixedLenFeature([seq_length], tf.int64),
       "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
@@ -518,8 +557,11 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
       "is_real_example": tf.FixedLenFeature([], tf.int64),
   }
 
+  # 调用_decode_record函数对record进行parsing。从而把TFRecord的一条Record变成tf.Example对象，
+  # 这个对象包括了input_ids等4个用于训练的Tensor。
   def _decode_record(record, name_to_features):
     """Decodes a record to a TensorFlow example."""
+    # 把record decode成TensorFlow example
     example = tf.parse_single_example(record, name_to_features)
 
     # tf.Example only supports tf.int64, but the TPU only supports tf.int32.
@@ -534,15 +576,21 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
 
   def input_fn(params):
     """The actual input function."""
+    # 实际的输入函数
     batch_size = params["batch_size"]
 
     # For training, we want a lot of parallel reading and shuffling.
     # For eval, we want no shuffling and parallel reading doesn't matter.
+
+    # 首先从文件得到TFRecordDataset，然后判断是否训练(is_training)，来shuffle和重复读取，
+    # 对于验证和测试，不需要shuffle和并行读取
     d = tf.data.TFRecordDataset(input_file)
     if is_training:
       d = d.repeat()
       d = d.shuffle(buffer_size=100)
 
+    # 然后使用apply函数对每一个TFRecord进行map_and_batch，调用_decode_record函数对record进行解析，
+    # 从而把TFRecord的一条Record变成tf.Example对象，这个对象包括了input_ids等4个用于训练的Tensor。
     d = d.apply(
         tf.contrib.data.map_and_batch(
             lambda record: _decode_record(record, name_to_features),
@@ -556,13 +604,15 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_length):
   """Truncates a sequence pair in place to the maximum length."""
-
+  # 如果两个序列加起来长度太长，则需要去掉一些
   # This is a simple heuristic which will always truncate the longer sequence
   # one token at a time. This makes more sense than truncating an equal percent
   # of tokens from each, since if one sequence is very short then each token
   # that's truncated likely contains more information than a longer sequence.
   while True:
     total_length = len(tokens_a) + len(tokens_b)
+    # 如果两个序列加起来的长度小于最大长度，那么不用truncate，否则在tokens_a和tokens_b中选择长的那个序列，去掉后面的Token，
+    # 这样使得a和b长度一样，或者最多多一个Token
     if total_length <= max_length:
       break
     if len(tokens_a) > len(tokens_b):
@@ -574,6 +624,9 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
 def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
                  labels, num_labels, use_one_hot_embeddings):
   """Creates a classification model."""
+  # 这一整段代码，调用modeling.BertModel得到BERT模型，然后使用它的get_pooled_output()得到[CLS]最后一层的输出，
+  # 这是一个768的向量，然后是连接到一个全连接层得到logits，然后softmax得到概率，再然后就可以根据真实的分类标签计算loss，
+  # 这时候的关键代码是modeling.BertModel
   model = modeling.BertModel(
       config=bert_config,
       is_training=is_training,
@@ -587,8 +640,12 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
   #
   # If you want to use the token-level output, use model.get_sequence_output()
   # instead.
+  # 在这里仅仅用来做分类，所以只需要得到[CLS]最后一层的输出。
+  # 如果需要做序列标注，那么可以使用model.get_sequence_output()
+  # 默认参数下，返回的output_layer是[8, 768]
   output_layer = model.get_pooled_output()
 
+  # 默认是768
   hidden_size = output_layer.shape[-1].value
 
   output_weights = tf.get_variable(
@@ -601,8 +658,9 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
   with tf.variable_scope("loss"):
     if is_training:
       # I.e., 0.1 dropout
+      # 0.1的概率会dropout
       output_layer = tf.nn.dropout(output_layer, keep_prob=0.9)
-
+    # 对[CLS]输出的768个向量再做一个线性变换，输出为label的个数，得到logits
     logits = tf.matmul(output_layer, output_weights, transpose_b=True)
     logits = tf.nn.bias_add(logits, output_bias)
     probabilities = tf.nn.softmax(logits, axis=-1)
@@ -623,6 +681,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
     """The `model_fn` for TPUEstimator."""
+    # 在model_fn 里面，features表示输入（特征），而labels 表示输出
 
     tf.logging.info("*** Features ***")
     for name in sorted(features.keys()):
@@ -640,6 +699,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
+    # 创建transformer模型，这是最主要的代码***
     (total_loss, per_example_loss, logits, probabilities) = create_model(
         bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
         num_labels, use_one_hot_embeddings)
@@ -647,6 +707,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
     tvars = tf.trainable_variables()
     initialized_variable_names = {}
     scaffold_fn = None
+    # 从checkpoint恢复参数
     if init_checkpoint:
       (assignment_map, initialized_variable_names
       ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
@@ -669,6 +730,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                       init_string)
 
     output_spec = None
+    # 构造训练的spec
     if mode == tf.estimator.ModeKeys.TRAIN:
 
       train_op = optimization.create_optimizer(
@@ -679,6 +741,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
           loss=total_loss,
           train_op=train_op,
           scaffold_fn=scaffold_fn)
+      # 构造eval的spec
     elif mode == tf.estimator.ModeKeys.EVAL:
 
       def metric_fn(per_example_loss, label_ids, logits, is_real_example):
@@ -698,6 +761,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
           loss=total_loss,
           eval_metrics=eval_metrics,
           scaffold_fn=scaffold_fn)
+      # 预测的spec
     else:
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
@@ -864,6 +928,7 @@ def main(_):
       eval_batch_size=FLAGS.eval_batch_size,
       predict_batch_size=FLAGS.predict_batch_size)
 
+    # train:训练部分
   if FLAGS.do_train:
     train_file = os.path.join(FLAGS.output_dir, "train.tf_record")
     file_based_convert_examples_to_features(

@@ -12,7 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Run masked LM/next sentence masked_lm pre-training for BERT."""
+"""Run masked LM/next sentence masked_lm pre-training for BERT.
+用pretraining.py生成的数据进行预训练，依赖：modeling.py, optimization.py
+"""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -136,11 +138,13 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         token_type_ids=segment_ids,
         use_one_hot_embeddings=use_one_hot_embeddings)
 
+    # get_masked_lm_output是计算语言模型的LOSS(MASK位置预测的词和真实词是否相同)
     (masked_lm_loss,
      masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
          bert_config, model.get_sequence_output(), model.get_embedding_table(),
          masked_lm_positions, masked_lm_ids, masked_lm_weights)
 
+    # get_next_sentence_output用于计算预测下一个句子的loss
     (next_sentence_loss, next_sentence_example_loss,
      next_sentence_log_probs) = get_next_sentence_output(
          bert_config, model.get_pooled_output(), next_sentence_labels)
@@ -240,11 +244,14 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
                          label_ids, label_weights):
   """Get loss and log probs for the masked LM."""
+  # 得到MASK的LM的 loss和log概率
   input_tensor = gather_indexes(input_tensor, positions)
 
   with tf.variable_scope("cls/predictions"):
     # We apply one more non-linear transformation before the output layer.
     # This matrix is not used after pre-training.
+
+    # 在输出之前再加一个非线性变换，这些参数只是用于训练，在Fine-Tuning的时候就不用了。
     with tf.variable_scope("transform"):
       input_tensor = tf.layers.dense(
           input_tensor,
@@ -256,6 +263,9 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
 
     # The output weights are the same as the input embeddings, but there is
     # an output-only bias for each token.
+
+    # output_weights是复用输入的word Embedding，所以是传入的，
+    # 这里再多加一个bias。
     output_bias = tf.get_variable(
         "output_bias",
         shape=[bert_config.vocab_size],
@@ -264,6 +274,8 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     logits = tf.nn.bias_add(logits, output_bias)
     log_probs = tf.nn.log_softmax(logits, axis=-1)
 
+    # label_ids的长度是20，表示最大的MASK的Token数
+    # label_ids里存放的是MASK过的Token的id
     label_ids = tf.reshape(label_ids, [-1])
     label_weights = tf.reshape(label_weights, [-1])
 
@@ -274,6 +286,9 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     # short to have the maximum number of predictions). The `label_weights`
     # tensor has a value of 1.0 for every real prediction and 0.0 for the
     # padding predictions.
+
+    # 但是由于实际MASK的可能不到20，比如只MASK18，那么label_ids有2个0(padding)
+    # 而label_weights=[1, 1, ...., 0, 0]，说明后面两个label_id是padding的，计算loss要去掉。
     per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1])
     numerator = tf.reduce_sum(label_weights * per_example_loss)
     denominator = tf.reduce_sum(label_weights) + 1e-5

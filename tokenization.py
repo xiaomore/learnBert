@@ -12,7 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tokenization classes."""
+"""Tokenization classes.
+文本标记化的类和函数
+"""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -151,6 +153,7 @@ def convert_ids_to_tokens(inv_vocab, ids):
 
 def whitespace_tokenize(text):
   """Runs basic whitespace cleaning and splitting on a piece of text."""
+  # 直接使用split进行分词
   text = text.strip()
   if not text:
     return []
@@ -161,9 +164,14 @@ def whitespace_tokenize(text):
 class FullTokenizer(object):
   """Runs end-to-end tokenziation."""
 
+  # do_lower_case决定了是否区分大小写，如果只是fine-tuning，则需要与模型保持一致，
+  # 比如模型是uncased_L-12_H-768_A-12，do_lower_case一定是False，即不区分大小写
   def __init__(self, vocab_file, do_lower_case=True):
+    # load_vocab()加载词典，建立词到ID的映射关系
     self.vocab = load_vocab(vocab_file)
     self.inv_vocab = {v: k for k, v in self.vocab.items()}
+
+    # BasicTokenizer()根据空格进行普通的分词，WordpieceTokenizer()把BasicTokenizer的结果再细粒度的切分为WordPiece
     self.basic_tokenizer = BasicTokenizer(do_lower_case=do_lower_case)
     self.wordpiece_tokenizer = WordpieceTokenizer(vocab=self.vocab)
 
@@ -195,7 +203,9 @@ class BasicTokenizer(object):
 
   def tokenize(self, text):
     """Tokenizes a piece of text."""
+    # convert_to_unicode()转成Unicode
     text = convert_to_unicode(text)
+    # _clean_text() 去除无意义的词
     text = self._clean_text(text)
 
     # This was added on November 1st, 2018 for the multilingual and Chinese
@@ -204,25 +214,32 @@ class BasicTokenizer(object):
     # and generally don't have any Chinese data in them (there are Chinese
     # characters in the vocabulary because Wikipedia does have some Chinese
     # words in the English Wikipedia.).
+    # 这是2018年11月1日为了支持多语言和中文增加的代码。这个代码也可以用于英语模型，因为在
+    # 英语的训练数据中基本不会出现中文字符(但是某些wiki里偶尔也可能出现中文)。
+
+    # 分词，就是切分成一个一个的汉字，也就是在中文字符的前后加上空格
     text = self._tokenize_chinese_chars(text)
 
+    # 使用whitespace进行分词，直接使用split实现分词
     orig_tokens = whitespace_tokenize(text)
     split_tokens = []
     for token in orig_tokens:
       if self.do_lower_case:
-        token = token.lower()
-        token = self._run_strip_accents(token)
-      split_tokens.extend(self._run_split_on_punc(token))
+        token = token.lower()  # 如果需要，转为小写
+        token = self._run_strip_accents(token)  # 去除重音
+      split_tokens.extend(self._run_split_on_punc(token))  # 再切分
 
     output_tokens = whitespace_tokenize(" ".join(split_tokens))
     return output_tokens
 
   def _run_strip_accents(self, text):
     """Strips accents from a piece of text."""
+    # 去掉文本中的重音，café: 就是e头上的那个
     text = unicodedata.normalize("NFD", text)
     output = []
     for char in text:
       cat = unicodedata.category(char)
+      # 把category为Mn的去掉，就是那个头上的一撇那个类型的
       if cat == "Mn":
         continue
       output.append(char)
@@ -236,8 +253,8 @@ class BasicTokenizer(object):
     output = []
     while i < len(chars):
       char = chars[i]
-      if _is_punctuation(char):
-        output.append([char])
+      if _is_punctuation(char):  # 判断是否为标点
+        output.append([char])    # 对字符串用标点符号进行切分，返回一个list，其中的每个元素都是一个char，比如输入I'm, 返回[[I], ['], [m]]
         start_new_word = True
       else:
         if start_new_word:
@@ -250,6 +267,8 @@ class BasicTokenizer(object):
 
   def _tokenize_chinese_chars(self, text):
     """Adds whitespace around any CJK character."""
+    # 分词，就是切分成一个一个的汉字，
+    # _is_chinese_char判断是否为中文字符，在中文字符的前后加上空格
     output = []
     for char in text:
       cp = ord(char)
@@ -285,13 +304,18 @@ class BasicTokenizer(object):
 
   def _clean_text(self, text):
     """Performs invalid character removal and whitespace cleanup on text."""
+    # 去除无意义字符和whitespace
     output = []
     for char in text:
+      # cp:codepoint， codepoint为0是无意义字符，
+      # 0xfffd(U+FFFD)显示为�，通常用于替换未知字符，
+      # _is_control()判断字符是否为控制字符，控制字符指的是那些比如\n可以控制功能的字符
       cp = ord(char)
       if cp == 0 or cp == 0xfffd or _is_control(char):
         continue
+      # 判断是否是空白字符，如果是，变成空格
       if _is_whitespace(char):
-        output.append(" ")
+        output.append(" ")  # 把whitespace变成空格
       else:
         output.append(char)
     return "".join(output)
@@ -306,6 +330,7 @@ class WordpieceTokenizer(object):
     self.max_input_chars_per_word = max_input_chars_per_word
 
   def tokenize(self, text):
+    # 把一段文字切分成word piece，使用贪心最长匹配优先算法
     """Tokenizes a piece of text into its word pieces.
 
     This uses a greedy longest-match-first algorithm to perform tokenization
@@ -329,7 +354,7 @@ class WordpieceTokenizer(object):
     for token in whitespace_tokenize(text):
       chars = list(token)
       if len(chars) > self.max_input_chars_per_word:
-        output_tokens.append(self.unk_token)
+        output_tokens.append(self.unk_token)  # 大于设定的最大长度，用[UNK]替换
         continue
 
       is_bad = False
@@ -341,7 +366,7 @@ class WordpieceTokenizer(object):
         while start < end:
           substr = "".join(chars[start:end])
           if start > 0:
-            substr = "##" + substr
+            substr = "##" + substr  # ##表示这个词是接着前面的，这样使得WordPiece切分是可逆的——我们可以恢复出“真正”的词。
           if substr in self.vocab:
             cur_substr = substr
             break
@@ -363,6 +388,7 @@ def _is_whitespace(char):
   """Checks whether `chars` is a whitespace character."""
   # \t, \n, and \r are technically contorl characters but we treat them
   # as whitespace since they are generally considered as such.
+  # 这里把category为“Zs”, 空格、制表、换行、回车当作是whitespace
   if char == " " or char == "\t" or char == "\n" or char == "\r":
     return True
   cat = unicodedata.category(char)
@@ -372,11 +398,14 @@ def _is_whitespace(char):
 
 
 def _is_control(char):
+  # 检查char是否是控制字符
   """Checks whether `chars` is a control character."""
   # These are technically control characters but we count them as whitespace
   # characters.
+  # 理论上tab、换行、回车符是控制字符，但在这里把它们认为是whitespace, Why?--为什么在这里要把它们三个归为whitespace，出于什么考虑呢，方便处理吗？
   if char == "\t" or char == "\n" or char == "\r":
     return False
+  # category返回这个Unicode字符的category，这里认为C开头的都是控制字符。
   cat = unicodedata.category(char)
   if cat in ("Cc", "Cf"):
     return True
@@ -390,10 +419,12 @@ def _is_punctuation(char):
   # Characters such as "^", "$", and "`" are not in the Unicode
   # Punctuation class but we treat them as punctuation anyways, for
   # consistency.
+  # 判断一个字符是否为标点符号
   if ((cp >= 33 and cp <= 47) or (cp >= 58 and cp <= 64) or
       (cp >= 91 and cp <= 96) or (cp >= 123 and cp <= 126)):
     return True
   cat = unicodedata.category(char)
+  # category是P开头的都是标点
   if cat.startswith("P"):
     return True
   return False
